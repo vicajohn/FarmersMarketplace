@@ -58,6 +58,11 @@ try {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (farmer_id) REFERENCES users(id)
     );
+  `);
+} catch (err) {
+  console.error('[DB] Failed to initialize schema:', err.message);
+}
+
 const USE_POSTGRES = !!process.env.DATABASE_URL;
 
 if (USE_POSTGRES) {
@@ -86,6 +91,7 @@ try { db.exec(`ALTER TABLE users ADD COLUMN referral_code TEXT UNIQUE`); } catch
 try { db.exec(`ALTER TABLE users ADD COLUMN federation_name TEXT UNIQUE`); } catch {}
 try { db.exec(`ALTER TABLE users ADD COLUMN referred_by INTEGER REFERENCES users(id)`); } catch {}
 try { db.exec(`ALTER TABLE users ADD COLUMN referral_bonus_sent INTEGER DEFAULT 0`); } catch {}
+try { db.exec(`ALTER TABLE users ADD COLUMN stellar_mnemonic TEXT`); } catch {}
 try { db.exec(`ALTER TABLE products ADD COLUMN low_stock_threshold INTEGER DEFAULT 5`); } catch {}
 try { db.exec(`ALTER TABLE products ADD COLUMN low_stock_alerted INTEGER DEFAULT 0`); } catch {}
   module.exports = pg;
@@ -168,9 +174,12 @@ try { db.exec(`ALTER TABLE products ADD COLUMN low_stock_alerted INTEGER DEFAULT
     `ALTER TABLE orders ADD COLUMN address_id INTEGER REFERENCES addresses(id)`,
     `ALTER TABLE products ADD COLUMN category TEXT DEFAULT 'other'`,
     `ALTER TABLE products ADD COLUMN image_url TEXT`,
+    `ALTER TABLE products ADD COLUMN carbon_kg_per_unit REAL`,
     `ALTER TABLE products ADD COLUMN low_stock_threshold INTEGER DEFAULT 5`,
     `ALTER TABLE products ADD COLUMN low_stock_alerted INTEGER DEFAULT 0`,
     `ALTER TABLE users ADD COLUMN active INTEGER DEFAULT 1`,
+    `ALTER TABLE users ADD COLUMN verification_status TEXT DEFAULT 'unverified'`,
+    `ALTER TABLE users ADD COLUMN verification_docs TEXT`,
     `ALTER TABLE users ADD COLUMN bio TEXT`,
     `ALTER TABLE users ADD COLUMN location TEXT`,
     `ALTER TABLE users ADD COLUMN avatar_url TEXT`,
@@ -178,6 +187,7 @@ try { db.exec(`ALTER TABLE products ADD COLUMN low_stock_alerted INTEGER DEFAULT
     `ALTER TABLE users ADD COLUMN federation_name TEXT UNIQUE`,
     `ALTER TABLE users ADD COLUMN referred_by INTEGER REFERENCES users(id)`,
     `ALTER TABLE users ADD COLUMN referral_bonus_sent INTEGER DEFAULT 0`,
+    `ALTER TABLE users ADD COLUMN stellar_mnemonic TEXT`,
     `CREATE TABLE IF NOT EXISTS product_images (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       product_id INTEGER NOT NULL,
@@ -252,7 +262,12 @@ try { db.exec(`ALTER TABLE products ADD COLUMN low_stock_alerted INTEGER DEFAULT
     `CREATE TABLE IF NOT EXISTS stock_alerts (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL,
-    );
+      product_id INTEGER NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(user_id, product_id),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+    )`
   `);
 } catch (err) {
   console.error('[DB] Failed to create idempotency_keys table:', err.message);
@@ -267,8 +282,15 @@ try {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       UNIQUE(user_id, product_id),
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-      FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
-    )`,
+      FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE    )`,
+    `CREATE TABLE IF NOT EXISTS price_tiers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id INTEGER NOT NULL,
+      min_quantity INTEGER NOT NULL CHECK(min_quantity > 0),
+      price_per_unit REAL NOT NULL CHECK(price_per_unit > 0),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE,
+      UNIQUE(product_id, min_quantity)    )`,
     `CREATE VIRTUAL TABLE IF NOT EXISTS products_fts USING fts5(
       name, description, content='products', content_rowid='id'
     )`,
@@ -292,6 +314,18 @@ try {
       used_count     INTEGER NOT NULL DEFAULT 0,
       expires_at     DATETIME,
       created_at     DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`,
+    `CREATE TABLE IF NOT EXISTS crop_alerts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      farmer_id INTEGER NOT NULL,
+      alert_type TEXT NOT NULL CHECK(alert_type IN ('pest', 'disease', 'weather', 'other')),
+      description TEXT NOT NULL,
+      location TEXT,
+      latitude REAL,
+      longitude REAL,
+      severity TEXT DEFAULT 'medium' CHECK(severity IN ('low', 'medium', 'high')),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (farmer_id) REFERENCES users(id) ON DELETE CASCADE
     )`,
   ];
 
@@ -387,6 +421,75 @@ try {
   `);
 } catch (err) {
   console.error('[DB] Failed to create bundles tables:', err.message);
+}
+
+// account_alerts table — placeholder kept for branch compatibility
+// availability_calendar table
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS availability_calendar (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id INTEGER NOT NULL,
+      week_start TEXT NOT NULL,
+      available  INTEGER NOT NULL DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(product_id, week_start),
+      FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+    );
+  `);
+} catch (err) {
+  console.error('[DB] Failed to create availability_calendar table:', err.message);
+// cooperatives + multisig tables
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS cooperatives (
+      id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+      name               TEXT NOT NULL,
+      stellar_public_key TEXT,
+      stellar_secret_key TEXT,
+      multisig_threshold INTEGER NOT NULL DEFAULT 1,
+      created_at         DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS cooperative_members (
+      cooperative_id INTEGER NOT NULL,
+      user_id        INTEGER NOT NULL,
+      PRIMARY KEY (cooperative_id, user_id),
+      FOREIGN KEY (cooperative_id) REFERENCES cooperatives(id) ON DELETE CASCADE,
+      FOREIGN KEY (user_id)        REFERENCES users(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS pending_transactions (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      cooperative_id INTEGER NOT NULL,
+      initiator_id   INTEGER NOT NULL,
+      xdr            TEXT NOT NULL,
+      amount         REAL NOT NULL,
+      destination    TEXT NOT NULL,
+      memo           TEXT,
+      signatures     TEXT NOT NULL DEFAULT '[]',
+      status         TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','submitted','expired','cancelled')),
+      expires_at     DATETIME NOT NULL,
+      created_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (cooperative_id) REFERENCES cooperatives(id) ON DELETE CASCADE,
+      FOREIGN KEY (initiator_id)   REFERENCES users(id)
+    );
+  `);
+} catch (err) {
+  console.error('[DB] Failed to create cooperative tables:', err.message);
+// account_alerts table
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS account_alerts (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id    INTEGER NOT NULL,
+      type       TEXT NOT NULL,
+      message    TEXT NOT NULL,
+      read_at    DATETIME,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+  `);
+} catch (err) {
+  console.error('[DB] Failed to create account_alerts table:', err.message);
 }
 
 module.exports = db;

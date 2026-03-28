@@ -48,6 +48,7 @@ app.use(express.json());
 app.use(cookieParser());
 app.use(sanitizeResponse);
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
+app.use('/uploads/videos', express.static(path.join(__dirname, '../uploads/videos')));
 
 app.get('/api/csrf-token', csrfTokenHandler);
 
@@ -61,5 +62,11 @@ if (process.env.NODE_ENV !== 'test') {
 
 app.use(require('./routes'));
 app.use(errorHandler);
+
+// Start background jobs (skip in test to avoid open handles)
+if (process.env.NODE_ENV !== 'test') {
+  const { startActivityMonitor } = require('./jobs/activityMonitor');
+  startActivityMonitor();
+}
 
 module.exports = app;

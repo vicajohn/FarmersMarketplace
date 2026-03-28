@@ -51,8 +51,13 @@ router.use('/api/wallet/send',      sendLimiter);
 // Routes
 router.use('/api/auth',          require('./auth'));
 router.use('/api/products',      require('./products'));
+router.use('/api/products',      require('./productVideos'));
+router.use('/api/products/:id/calendar', require('./calendar'));
 router.use('/api/orders',        require('./orders'));
+router.use('/api/waitlist',      require('./waitlist'));
+router.use('/api/wallet',        require('./alerts'));
 router.use('/api/wallet',        require('./wallet'));
+router.use('/api/cooperatives',  require('./cooperatives'));
 router.use('/api/analytics',     require('./analytics'));
 router.use('/api/admin',         require('./admin'));
 router.use('/api/farmers',       require('./farmers'));
@@ -60,15 +65,21 @@ router.use('/api/rates',         require('./rates'));
 router.use('/api/favorites',     require('./favorites'));
 router.use('/api/addresses',     require('./addresses'));
 router.use('/api/messages',      require('./messages'));
+router.use('/api/notifications', require('./notifications'));
 router.use('/api/contracts',     require('./contracts'));
 router.use('/api/products/bulk', require('./bulkUpload'));
 router.use('/api/coupons',       require('./coupons'));
+router.use('/api/alerts',        require('./alerts'));
+router.use('/api/products/bulk',   require('./bulkUpload'));
+router.use('/api/products/import', require('./productImport'));
+router.use('/api/coupons',         require('./coupons'));
 router.use('/api',               require('./reviews'));
 
 // Versioned aliases
 router.use('/api/v1/auth',      require('./auth'));
 router.use('/api/v1/products',  require('./products'));
 router.use('/api/v1/orders',    require('./orders'));
+router.use('/api/v1/waitlist',  require('./waitlist'));
 router.use('/api/v1/wallet',    require('./wallet'));
 router.use('/api/v1/farmers',   require('./farmers'));
 router.use('/api/v1/rates',     require('./rates'));

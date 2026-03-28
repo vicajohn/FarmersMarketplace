@@ -39,4 +39,43 @@ router.get('/stats', async (_req, res) => {
   res.json({ success: true, data: { users: parseInt(u[0].count), products: parseInt(p[0].count), orders: parseInt(o[0].count), total_revenue_xlm: r[0].total } });
 });
 
+// GET /api/admin/farmers/pending - Get farmers pending verification
+router.get('/farmers/pending', async (req, res) => {
+  const { rows } = await db.query(
+    `SELECT id, name, email, verification_status, verification_docs, created_at
+     FROM users
+     WHERE role = 'farmer' AND verification_status = 'pending'
+     ORDER BY created_at ASC`
+  );
+  res.json({ success: true, data: rows });
+});
+
+// PATCH /api/admin/farmers/:id/verify - Approve or reject verification
+router.patch('/farmers/:id/verify', async (req, res) => {
+  const { status, reason } = req.body;
+  
+  if (!['verified', 'rejected'].includes(status)) {
+    return res.status(400).json({ success: false, error: 'status must be verified or rejected', code: 'validation_error' });
+  }
+
+  const { rows } = await db.query('SELECT id, name, email, role FROM users WHERE id = $1', [req.params.id]);
+  if (!rows[0]) return res.status(404).json({ success: false, error: 'User not found' });
+  if (rows[0].role !== 'farmer') return res.status(400).json({ success: false, error: 'User is not a farmer' });
+
+  await db.query('UPDATE users SET verification_status = $1 WHERE id = $2', [status, req.params.id]);
+
+  // Send notification email
+  const mailer = require('../utils/mailer');
+  const farmer = rows[0];
+  const subject = status === 'verified' ? '✅ Farmer Verification Approved' : '❌ Farmer Verification Rejected';
+  const message = status === 'verified'
+    ? `Hello ${farmer.name},\n\nYour farmer verification has been approved! You now have a verified badge on your profile.\n\nThank you for being part of our trusted community.\n\nBest regards,\nFarmers Marketplace`
+    : `Hello ${farmer.name},\n\nYour farmer verification request has been reviewed and could not be approved at this time.\n\n${reason ? `Reason: ${reason}` : ''}\n\nPlease contact support if you have questions.\n\nBest regards,\nFarmers Marketplace`;
+
+  mailer.sendMail({ to: farmer.email, subject, text: message })
+    .catch(e => console.error('[Admin] Failed to send verification email:', e.message));
+
+  res.json({ success: true, message: `Farmer ${status}` });
+});
+
 module.exports = router;
